@@ -2,7 +2,13 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .database.database import get_db
-from .database.models import Product, Cart, CartItem
+from .database.models import (
+    Product,
+    Cart,
+    CartItem,
+    Order,
+    OrderItem
+)
 
 app = FastAPI(
     title="RazorAgent API",
@@ -233,4 +239,163 @@ def remove_from_cart(
 
     return {
         "message": "Product removed from cart"
+    }
+
+@app.post("/checkout/{customer_id}")
+def checkout(
+    customer_id: int,
+    db: Session = Depends(get_db)
+):
+    # Find customer's cart
+    cart = (
+        db.query(Cart)
+        .filter(Cart.customer_id == customer_id)
+        .first()
+    )
+    existing_order = (
+        db.query(Order)
+        .filter(
+            Order.cart_id == cart.id,
+            Order.status == "PENDING_PAYMENT"
+        )
+        .first()
+    )
+
+    if existing_order:
+        return {
+            "message": "Existing pending order found",
+            "order_id": existing_order.id,
+            "total_amount": existing_order.total_amount,
+            "status": existing_order.status
+        }
+    
+    if not cart:
+        raise HTTPException(
+            status_code=404,
+            detail="Cart not found"
+        )
+
+    # Get cart items
+    cart_items = (
+        db.query(CartItem)
+        .filter(CartItem.cart_id == cart.id)
+        .all()
+    )
+
+    if not cart_items:
+        raise HTTPException(
+            status_code=400,
+            detail="Cart is empty"
+        )
+
+    total = 0
+    order_items = []
+
+    # Validate products and calculate total
+    for item in cart_items:
+
+        product = (
+            db.query(Product)
+            .filter(Product.id == item.product_id)
+            .first()
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Product {item.product_id} not found"
+            )
+
+        if product.stock < item.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough stock for {product.name}"
+            )
+
+        subtotal = product.price * item.quantity
+        total += subtotal
+
+        order_items.append({
+            "product_id": product.id,
+            "product_name": product.name,
+            "price": product.price,
+            "quantity": item.quantity,
+            "subtotal": subtotal
+        })
+
+    # Create order
+    order = Order(
+        customer_id=customer_id,
+        cart_id=cart.id,
+        total_amount=total,
+        status="PENDING_PAYMENT"
+    )
+
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    # Create order items
+    for item in order_items:
+
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=item["product_id"],
+            product_name=item["product_name"],
+            price=item["price"],
+            quantity=item["quantity"],
+            subtotal=item["subtotal"]
+        )
+
+        db.add(order_item)
+
+    db.commit()
+
+    return {
+        "message": "Order created successfully",
+        "order_id": order.id,
+        "customer_id": customer_id,
+        "total_amount": total,
+        "status": order.status,
+        "items": order_items
+    }
+
+@app.get("/orders/{order_id}")
+def get_order(
+    order_id: int,
+    db: Session = Depends(get_db)
+):
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id)
+        .first()
+    )
+
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail="Order not found"
+        )
+
+    items = (
+        db.query(OrderItem)
+        .filter(OrderItem.order_id == order_id)
+        .all()
+    )
+
+    return {
+        "order_id": order.id,
+        "customer_id": order.customer_id,
+        "total_amount": order.total_amount,
+        "status": order.status,
+        "items": [
+            {
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "price": item.price,
+                "quantity": item.quantity,
+                "subtotal": item.subtotal
+            }
+            for item in items
+        ]
     }
