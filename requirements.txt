@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+streamlit
+sqlalchemy
+python-dotenv
+pydantic
+requests
+httpx
+openai
+razorpaygit 
