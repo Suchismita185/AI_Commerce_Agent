@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel
+
+from .agent.agent import run_agent
+
 from .database.database import get_db
 from .database.models import (
     Product,
@@ -252,6 +256,13 @@ def checkout(
         .filter(Cart.customer_id == customer_id)
         .first()
     )
+
+    if not cart:
+        raise HTTPException(
+            status_code=404,
+            detail="Cart not found"
+        )
+
     existing_order = (
         db.query(Order)
         .filter(
@@ -268,12 +279,6 @@ def checkout(
             "total_amount": existing_order.total_amount,
             "status": existing_order.status
         }
-    
-    if not cart:
-        raise HTTPException(
-            status_code=404,
-            detail="Cart not found"
-        )
 
     # Get cart items
     cart_items = (
@@ -398,4 +403,20 @@ def get_order(
             }
             for item in items
         ]
+    }
+
+class ChatRequest(BaseModel):
+    customer_id: int
+    message: str
+
+@app.post("/chat")
+def chat(request: ChatRequest):
+
+    response = run_agent(
+        user_message=request.message,
+        customer_id=request.customer_id
+    )
+
+    return {
+        "response": response
     }
